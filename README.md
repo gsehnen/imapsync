@@ -23,7 +23,7 @@ Sequência recomendada para uma migração real:
 ./migrar_email.py --csv piloto.csv --origem imap.antigo.com --destino imap.novo.com --simular
 
 # 2 - Confira no log para qual pasta cada pasta iria
-grep '^Folder' execucoes/<data>/logs/*.txt
+grep '^Folder ' $(ls -td execucoes/*/simulacoes/*/ | head -1)logs/*.txt
 
 # 3 - Migração real
 ./migrar_email.py --csv contas.csv --origem imap.antigo.com --destino imap.novo.com --medir
@@ -87,7 +87,7 @@ no relatório. O que já foi copiado não é copiado de novo.
 ```bash
 ./migrar_email.py --repetir-falhas                         # última execução; pede as senhas
 ./migrar_email.py --repetir-falhas --csv contas.csv         # pega as senhas do CSV
-./migrar_email.py --repetir-falhas execucoes/2026-11-05_103727
+./migrar_email.py --repetir-falhas execucoes/empresa.com/2026-11-05_103727
 ```
 
 - O relatório nunca guarda senhas: sem `--csv`, elas são pedidas de novo.
@@ -226,16 +226,22 @@ imprime uma linha a cada conta concluída e a cada 30 segundos.
 
 ```
 execucoes/
-├── ultima -> 2026-11-05_103727          atalho para a última execução real
-└── 2026-11-05_103727/
-    ├── relatorio.csv                    uma linha por conta
-    ├── relatorio.json                   o mesmo, com todos os erros e as opções usadas
-    └── logs/
-        ├── 001_joao@empresa.com.txt             log completo do imapsync
-        ├── 001_joao@empresa.com_tentativa2.txt  nova tentativa, se houve
-        ├── 001_joao@empresa.com.validacao.txt   teste de login
-        └── 001_joao@empresa.com.medicao.txt     medição (--medir)
+├── ultima -> empresa.com/2026-11-05_103727    atalho para a última execução real
+└── empresa.com/                                domínio das contas de origem
+    ├── simulacoes/
+    │   └── 2026-11-05_101500/                  execuções com --simular
+    └── 2026-11-05_103727/
+        ├── relatorio.csv                       uma linha por conta
+        ├── relatorio.json                      o mesmo, com todos os erros e as opções usadas
+        └── logs/
+            ├── 001_joao@empresa.com.txt             log completo do imapsync
+            ├── 001_joao@empresa.com_tentativa2.txt  nova tentativa, se houve
+            ├── 001_joao@empresa.com.validacao.txt   teste de login
+            └── 001_joao@empresa.com.medicao.txt     medição (--medir)
 ```
+
+A pasta do domínio vem das contas de origem. Com vários domínios, ela se chama
+`empresa.com_e_mais_2`; sem domínio no usuário, `sem_dominio`.
 
 O relatório é atualizado a cada conta concluída. As pastas de execução só podem ser lidas pelo dono.
 Senhas não são gravadas nos logs nem nos relatórios.
@@ -250,8 +256,9 @@ Colunas do relatório:
 | `copiadas` | Mensagens copiadas nesta execução (em `--simular`, as que seriam copiadas). |
 | `ja_existiam` | Mensagens que já estavam no destino. |
 | `faltando_no_destino` | Mensagens da origem que não estão no destino. |
-| `bytes_copiados` | Volume copiado. |
-| `tamanho_origem_bytes`, `mensagens_origem` | Tamanho medido; vazio sem `--medir`. |
+| `bytes_copiados`, `copiado_legivel` | Volume copiado, em bytes e legível (ex.: `493.4 KiB`). |
+| `tamanho_origem_bytes`, `tamanho_origem_legivel` | Tamanho medido, em bytes e legível; vazio sem `--medir`. |
+| `mensagens_origem` | Quantidade de mensagens medida; vazio sem `--medir`. |
 | `tentativas`, `duracao_s` | Tentativas usadas e tempo gasto. |
 | `log` | Caminho do log. |
 | `primeiro_erro` (CSV) ou `erros` (JSON) | Mensagem de erro do imapsync. |

@@ -812,7 +812,9 @@ class Migration:
             "ja_existiam": a.skipped,
             "faltando_no_destino": a.missing,
             "bytes_copiados": a.copied_bytes,
+            "copiado_legivel": format_bytes(a.copied_bytes),
             "tamanho_origem_bytes": a.size_bytes,
+            "tamanho_origem_legivel": "" if a.size_bytes is None else format_bytes(a.size_bytes),
             "mensagens_origem": a.size_messages,
             "tentativas": a.attempts,
             "duracao_s": round(a.duration, 1),
@@ -956,7 +958,21 @@ def collect_inputs(options: argparse.Namespace, extra_args: list[str]):
     return source, target, accounts, extra_args
 
 
-def create_run_dir(base: Path) -> Path:
+def domain_folder_name(accounts: list[Account]) -> str:
+    """Pasta das execuções: o domínio das contas de origem."""
+    domains = list(dict.fromkeys(
+        a.user1.rpartition("@")[2].lower() for a in accounts if "@" in a.user1))
+    if not domains:
+        return "sem_dominio"
+    label = domains[0] if len(domains) == 1 else f"{domains[0]}_e_mais_{len(domains) - 1}"
+    # O domínio vem da entrada e vira caminho: "." e ".." não podem sair de `execucoes`.
+    return safe_name(label).strip(".") or "sem_dominio"
+
+
+def create_run_dir(base: Path, accounts: list[Account], simulation: bool) -> Path:
+    base = base / domain_folder_name(accounts)
+    if simulation:
+        base = base / "simulacoes"
     base.mkdir(parents=True, exist_ok=True)
     name = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
     run_dir = base / name
@@ -974,7 +990,7 @@ def point_latest_link(base: Path, run_dir: Path) -> None:
     temporary = base / "ultima.tmp"
     if temporary.is_symlink():
         temporary.unlink()
-    temporary.symlink_to(run_dir.name)
+    temporary.symlink_to(run_dir.relative_to(base))
     os.replace(temporary, base / "ultima")
 
 
@@ -1000,7 +1016,7 @@ def main(argv: list[str]) -> int:
         print("Nenhuma conta para repetir: todas terminaram OK na última execução.")
         return 0
 
-    run_dir = create_run_dir(options.dir_execucoes)
+    run_dir = create_run_dir(options.dir_execucoes, accounts, options.simular)
     migration = Migration(source, target, accounts, run_dir, options, extra_args)
     migration.write_report()
     # Simulação não vira "última": --repetir-falhas continua apontando para a execução real.

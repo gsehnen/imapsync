@@ -4,9 +4,8 @@
 [imapsync](https://imapsync.lamiral.info/). Mostra o progresso por conta e o total, lista o que
 falhou e grava um relatório ao final.
 
-**Requisitos:** `imapsync` no PATH e Python 3. Não há dependências Python para instalar.
-Testado com Python 3.12 e imapsync 2.229, entre servidores Dovecot. Gmail, Microsoft 365 e outros
-provedores não foram testados, então comece por uma conta piloto.
+**Requisitos:** `imapsync` no PATH e Python 3, não há dependências Python para instalar.
+Testado com Python 3.12 e imapsync 2.229, entre servidores Dovecot.
 
 ## Início rápido
 
@@ -20,20 +19,18 @@ as credenciais de cada conta. Depois testa os logins e começa a migração.
 Sequência recomendada para uma migração real:
 
 ```bash
-# 1. Conta piloto, em modo simulação: nada é copiado
+# 1 - Conta piloto, em modo simulação: nada é copiado
 ./migrar_email.py --csv piloto.csv --origem imap.antigo.com --destino imap.novo.com --simular
 
-# 2. Confira no log para qual pasta cada pasta iria
+# 2 - Confira no log para qual pasta cada pasta iria
 grep '^Folder' execucoes/<data>/logs/*.txt
 
-# 3. Migração real
+# 3 - Migração real
 ./migrar_email.py --csv contas.csv --origem imap.antigo.com --destino imap.novo.com --medir
 
-# 4. Se algo falhou, depois de corrigir a causa
+# 4- Se algo falhou, depois de corrigir a causa
 ./migrar_email.py --repetir-falhas --csv contas.csv
 
-# 5. No dia da virada, para pegar o que chegou depois
-./migrar_email.py --csv contas.csv --origem imap.antigo.com --destino imap.novo.com
 ```
 
 Use as mesmas opções do imapsync em todas as rodadas (veja [Nomes de pasta](#nomes-de-pasta)).

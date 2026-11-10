@@ -1,28 +1,4 @@
 #!/usr/bin/env python3
-"""Migração de contas de e-mail em lote usando o imapsync.
-
-Uso interativo (pergunta quantidade de contas, servidores e credenciais):
-    ./migrar_email.py
-
-Uso com arquivo CSV (cabeçalho obrigatório, separador "," ou ";"):
-    ./migrar_email.py --csv contas.csv --origem imap.antigo.com --destino imap.novo.com
-
-    usuario_origem;senha_origem;usuario_destino;senha_destino
-    joao@empresa.com;s3nha;joao@empresa.com;0utra
-    maria@empresa.com;s3nha2;;
-
-    Destino vazio = mesmo usuário/senha da origem.
-
-Repetir só o que não terminou OK na última execução:
-    ./migrar_email.py --repetir-falhas
-
-Opções extras do imapsync vão depois de "--":
-    ./migrar_email.py --csv contas.csv -- --automap --maxsize 50000000
-
-Rodar de novo é seguro: o imapsync compara os cabeçalhos das mensagens e copia
-apenas o que ainda não existe no destino.
-"""
-
 from __future__ import annotations
 
 import argparse

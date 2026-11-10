@@ -48,6 +48,7 @@ Use as mesmas opções do imapsync em todas as rodadas (veja [Nomes de pasta](#n
 | `--tentativas N` | Tentativas por conta em erros temporários. | `2` |
 | `--simular` | Mostra o que seria feito, sem copiar nada. | desligado |
 | `--medir` | Mede as contas antes, para a barra TOTAL andar por volume. | desligado |
+| `--telegram` | Avisa no Telegram cada conta concluída e o resumo final. | desligado |
 | `--sem-validacao` | Não testa os logins antes de começar. | valida |
 | `--dir-execucoes DIR` | Onde gravar logs e relatórios. | `./execucoes` |
 | `-- OPÇÕES` | Repassa o que vier depois ao imapsync. | |
@@ -124,6 +125,40 @@ couber no terminal.
 - Vale a pena quando as contas têm tamanhos muito diferentes. Em contas parecidas, muda pouco.
 - Conta que não puder ser medida entra com o tamanho médio das demais.
 - Dentro de cada conta, o avanço continua sendo por mensagens. O volume exibido é uma estimativa.
+
+### `--telegram`
+
+Avisa no Telegram o início da migração, o resultado de cada conta e o resumo final, com a lista do que
+não terminou OK. O resumo também é enviado quando a migração é interrompida.
+
+```
+✔ joao@empresa.com.br: 1234 copiada(s), 0 já existia(m), 450.0 MiB em 12:30
+✖ maria@empresa.com.br: Falha de autenticação no destino (usuário/senha) | Host2 failure: ...
+🏁 Migração concluída: imap.antigo.com → imap.novo.com
+```
+
+O token e o chat_id vêm de variáveis de ambiente, para não ficarem no `ps` nem no histórico do shell:
+
+```bash
+export TELEGRAM_TOKEN='123456789:AAH...'
+export TELEGRAM_CHAT_ID='123456789'
+./migrar_email.py --csv contas.csv --origem imap.antigo.com --destino imap.novo.com --telegram
+```
+
+Para criar o bot e descobrir o chat_id:
+
+1. No Telegram, mande `/newbot` para o **@BotFather** e siga as instruções, ele devolve o token.
+2. Abra a conversa com o seu bot, toque em **Iniciar** e mande qualquer mensagem.
+3. Rode `curl -s "https://api.telegram.org/botSEU_TOKEN/getUpdates"` e copie o número em
+   `"chat":{"id":...}`. Para avisar num grupo, adicione o bot ao grupo e mande uma mensagem lá
+   antes; o chat_id de grupo começa com `-`.
+
+- **O Telegram não interfere na migração:** se ele estiver fora do ar, a migração segue normalmente,
+  e o script avisa no fim quantas mensagens não foram enviadas.
+- **Simulações** chegam com o prefixo `[SIMULAÇÃO]`.
+- **Privacidade:** os nomes das contas e as mensagens de erro ficam salvos no Telegram. Senhas nunca
+  são enviadas.
+- **Token:** quem tiver o token controla o bot. Se ele vazar, gere outro com `/revoke` no @BotFather.
 
 ### `--sem-validacao`
 

@@ -33,6 +33,7 @@ import datetime
 import getpass
 import json
 import os
+import queue
 import re
 import shutil
 import signal
@@ -41,6 +42,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -91,6 +94,10 @@ RETRY_DELAY_SECONDS = 15
 PREPARE_MAX_WORKERS = 8
 MAX_STORED_ERRORS = 20
 PLAIN_PROGRESS_SECONDS = 30
+TELEGRAM_TIMEOUT_SECONDS = 10
+TELEGRAM_CLOSE_SECONDS = 20
+TELEGRAM_MAX_CHARS = 4000
+TELEGRAM_MAX_PROBLEMS = 30
 
 LEFT_RE = re.compile(r"(\d+)/(\d+) msgs left")
 FOLDER_RE = re.compile(r"^Folder\s+(\d+)/(\d+) \[(.*?)\]\s+->")
@@ -496,6 +503,41 @@ class Dashboard:
         return "  ".join(parts)
 
 
+class TelegramNotifier:
+    """Envia avisos ao Telegram em segundo plano, sem segurar a migração."""
+
+    def __init__(self, token: str, chat_id: str, prefix: str = ""):
+        self._url = f"https://api.telegram.org/bot{token}/sendMessage"
+        self._chat_id = chat_id
+        self._prefix = prefix
+        self._queue: queue.Queue[str | None] = queue.Queue()
+        self.failures = 0
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def send(self, text: str) -> None:
+        self._queue.put((self._prefix + text)[:TELEGRAM_MAX_CHARS])
+
+    def close(self) -> bool:
+        """Espera os avisos pendentes por alguns segundos; False se algum ficou para trás."""
+        self._queue.put(None)
+        self._thread.join(TELEGRAM_CLOSE_SECONDS)
+        return not self._thread.is_alive()
+
+    def _loop(self) -> None:
+        while True:
+            text = self._queue.get()
+            if text is None:
+                return
+            data = urllib.parse.urlencode({"chat_id": self._chat_id, "text": text}).encode()
+            try:
+                with urllib.request.urlopen(self._url, data, timeout=TELEGRAM_TIMEOUT_SECONDS):
+                    pass
+            except Exception:
+                # Aviso perdido é só contado: Telegram fora do ar não pode parar a migração.
+                self.failures += 1
+
+
 # ---------------------------------------------------------------------------
 # Execução
 # ---------------------------------------------------------------------------
@@ -503,7 +545,8 @@ class Dashboard:
 
 class Migration:
     def __init__(self, source: Server, target: Server, accounts: list[Account],
-                 run_dir: Path, options: argparse.Namespace, extra_args: list[str]):
+                 run_dir: Path, options: argparse.Namespace, extra_args: list[str],
+                 notifier: TelegramNotifier | None = None):
         self.source = source
         self.target = target
         self.accounts = accounts
@@ -511,6 +554,7 @@ class Migration:
         self.logs_dir = run_dir / "logs"
         self.options = options
         self.extra_args = extra_args
+        self.notifier = notifier
         self.started_at = datetime.datetime.now().astimezone()
         self.ui: Dashboard | None = None
         self.stopping = threading.Event()
@@ -669,6 +713,8 @@ class Migration:
         self.ui = Dashboard(self.accounts, f"\nMigrando {self.source} → {self.target}"
                             + (" (SIMULAÇÃO, nada será copiado)" if self.options.simular else ""))
         self.ui.start()
+        if self.notifier:
+            self.notifier.send(f"▶ Migrando {len(accounts)} conta(s): {self.source} → {self.target}")
         try:
             self._for_each(self.options.paralelo, self._migrate_account, accounts)
         finally:
@@ -782,9 +828,13 @@ class Migration:
         account.stage = ""
         with self._lock:
             self.write_report()
-        self.ui.event(self._outcome_line(account))
+        color, text = self._outcome(account)
+        self.ui.event(self.ui.color(color, f" {text}"))
+        if self.notifier:
+            self.notifier.send(text)
 
-    def _outcome_line(self, account: Account) -> str:
+    def _outcome(self, account: Account) -> tuple[str, str]:
+        """Linha de resultado da conta, sem cor, e o código de cor do terminal."""
         if self.options.simular:
             summary = (f"{account.copied} seria(m) copiada(s), {account.skipped} já existia(m), "
                        f"em {format_duration(account.duration)}")
@@ -793,11 +843,11 @@ class Migration:
                        f"{format_bytes(account.copied_bytes)} em "
                        f"{format_duration(account.duration)}")
         if account.status == STATUS_OK:
-            return self.ui.color("32", f" ✔ {account.label}: {summary}")
+            return "32", f"✔ {account.label}: {summary}"
         code = "33" if account.status in (STATUS_ERRORS, STATUS_INTERRUPTED) else "31"
         icon = "⚠" if code == "33" else "✖"
         detail = f" | {account.errors[0]}" if account.errors else ""
-        return self.ui.color(code, f" {icon} {account.label}: {account.reason}{detail}")
+        return code, f"{icon} {account.label}: {account.reason}{detail}"
 
     # ---- relatórios ---------------------------------------------------------
 
@@ -852,12 +902,34 @@ def safe_name(text: str) -> str:
     return re.sub(r"[^\w.@+-]", "_", text)[:80]
 
 
+def status_counts(accounts: list[Account]) -> str:
+    counts = collections.Counter(a.status for a in accounts)
+    return f"Contas: {len(accounts)}  |  " + "  |  ".join(
+        f"{STATUS_LABELS[status]}: {counts[status]}" for status in STATUS_LABELS if counts[status])
+
+
+def summary_text(migration: Migration, interrupted: bool) -> str:
+    """Resumo final enviado ao Telegram."""
+    accounts = migration.accounts
+    state = "interrompida" if interrupted else "concluída"
+    lines = [f"🏁 Migração {state}: {migration.source} → {migration.target}",
+             status_counts(accounts),
+             f"Mensagens copiadas: {sum(a.copied for a in accounts)} "
+             f"({format_bytes(sum(a.copied_bytes for a in accounts))})"]
+    problems = [a for a in accounts if a.status != STATUS_OK]
+    if problems:
+        lines.append("\nNão terminaram OK:")
+        for account in problems[:TELEGRAM_MAX_PROBLEMS]:
+            lines.append(f"• {account.label}: {account.reason or STATUS_LABELS[account.status]}")
+        if len(problems) > TELEGRAM_MAX_PROBLEMS:
+            lines.append(f"... e mais {len(problems) - TELEGRAM_MAX_PROBLEMS}")
+    return "\n".join(lines)
+
+
 def print_summary(migration: Migration) -> None:
     accounts = migration.accounts
-    counts = collections.Counter(a.status for a in accounts)
     print("\n" + "=" * 60)
-    print(f"Contas: {len(accounts)}  |  " + "  |  ".join(
-        f"{STATUS_LABELS[status]}: {counts[status]}" for status in STATUS_LABELS if counts[status]))
+    print(status_counts(accounts))
     copied = sum(a.copied for a in accounts)
     skipped = sum(a.skipped for a in accounts)
     if migration.options.simular:
@@ -918,6 +990,9 @@ def parse_arguments(argv: list[str]) -> tuple[argparse.Namespace, list[str]]:
                         help="roda o imapsync com --dry: mostra o que faria, sem copiar nada")
     parser.add_argument("--sem-validacao", action="store_true",
                         help="não testa os logins antes de começar")
+    parser.add_argument("--telegram", action="store_true",
+                        help="avisa no Telegram cada conta concluída e o resumo final "
+                             "(lê TELEGRAM_TOKEN e TELEGRAM_CHAT_ID do ambiente)")
     parser.add_argument("--medir", action="store_true",
                         help="mede as contas antes de começar, para a barra TOTAL andar por "
                              "volume em vez de por conta")
@@ -1003,6 +1078,13 @@ def main(argv: list[str]) -> int:
     if not shutil.which("imapsync"):
         print("Erro: imapsync não encontrado no PATH.", file=sys.stderr)
         return 2
+    # Token fica no ambiente: na linha de comando ele apareceria no `ps` e no histórico.
+    telegram = (os.environ.get("TELEGRAM_TOKEN", "").strip(),
+                os.environ.get("TELEGRAM_CHAT_ID", "").strip())
+    if options.telegram and not all(telegram):
+        print("Erro: --telegram precisa das variáveis TELEGRAM_TOKEN e TELEGRAM_CHAT_ID.",
+              file=sys.stderr)
+        return 2
 
     try:
         source, target, accounts, extra_args = collect_inputs(options, extra_args)
@@ -1017,7 +1099,10 @@ def main(argv: list[str]) -> int:
         return 0
 
     run_dir = create_run_dir(options.dir_execucoes, accounts, options.simular)
-    migration = Migration(source, target, accounts, run_dir, options, extra_args)
+    notifier = None
+    if options.telegram:
+        notifier = TelegramNotifier(*telegram, prefix="[SIMULAÇÃO] " if options.simular else "")
+    migration = Migration(source, target, accounts, run_dir, options, extra_args, notifier)
     migration.write_report()
     # Simulação não vira "última": --repetir-falhas continua apontando para a execução real.
     if not options.simular:
@@ -1054,6 +1139,14 @@ def main(argv: list[str]) -> int:
 
     migration.write_report()
     print_summary(migration)
+    if notifier:
+        notifier.send(summary_text(migration, interrupted))
+        if not notifier.close():
+            print("Aviso: o Telegram não respondeu a tempo; alguns avisos podem não ter chegado.",
+                  file=sys.stderr)
+        elif notifier.failures:
+            print(f"Aviso: {notifier.failures} aviso(s) do Telegram não foram enviados "
+                  "(confira token, chat_id e internet).", file=sys.stderr)
     if interrupted:
         return 130
     return 0 if all(a.status == STATUS_OK for a in accounts) else 1

@@ -1,3 +1,9 @@
 execucoes/
 *.csv
 __pycache__/
+
+# Ferramentas e listas de uso pessoal
+gerar_relatorio.py
+testar_senhas.sh
+emails*.txt
+FERRAMENTAS_PESSOAIS.md
